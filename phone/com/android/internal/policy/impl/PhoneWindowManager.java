@@ -164,16 +164,21 @@ public class PhoneWindowManager implements WindowManagerPolicy {
     static final int APPLICATION_SUB_PANEL_SUBLAYER = 2;
 
     static final float SLIDE_TOUCH_EVENT_SIZE_LIMIT = 0.6f;
-    
+
     // Debugging: set this to have the system act like there is no hard keyboard.
     static final boolean KEYBOARD_ALWAYS_HIDDEN = false;
-    
+
     static public final String SYSTEM_DIALOG_REASON_KEY = "reason";
     static public final String SYSTEM_DIALOG_REASON_GLOBAL_ACTIONS = "globalactions";
     static public final String SYSTEM_DIALOG_REASON_RECENT_APPS = "recentapps";
     static public final String SYSTEM_DIALOG_REASON_HOME_KEY = "homekey";
 
+    // how much time to wait in milliseconds to kill with the back key
+    static private final int LONG_PRESS_KEY_BACK_TIMEOUT = 5000;
+
     final Object mLock = new Object();
+
+    final Object mBackPressLock = new Object();
     
     Context mContext;
     IWindowManager mWindowManager;
@@ -497,9 +502,18 @@ public class PhoneWindowManager implements WindowManagerPolicy {
             }
         }
     };
-    
+
+    boolean backPressed = false;
+
     Runnable mBackLongPress = new Runnable() {
         public void run() {
+            //back button is not pressed now! there is nothing to do in here
+            synchronized(mBackPressLock) {
+
+            if (!backPressed)
+                return;
+              }
+
             if (Settings.Secure.getInt(mContext.getContentResolver(),
                 Settings.Secure.KILL_APP_LONGPRESS_BACK, 0) == 0) {
                 // Bail out unless the user has elected to turn this on.
@@ -584,7 +598,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
     
     void runCustomApp() {
         String uri = Settings.System.getString(mContext.getContentResolver(), Settings.System.SELECTED_CUSTOM_APP);
-        
+
         if (uri != null) {
             try {
                 Intent i = Intent.parseUri(uri, 0);
@@ -1162,10 +1176,22 @@ public class PhoneWindowManager implements WindowManagerPolicy {
             mHandler.removeCallbacks(mHomeLongPress);
         }
 
-        // Clear a pending BACK longpress if the user releases Back.
-        if ((code == KeyEvent.KEYCODE_BACK) && !down) {
-            mHandler.removeCallbacks(mBackLongPress);
-        }
+
+                //synchronize this block to try guarantee that the key back is pressed during the kill callback
+                synchronized(mBackPressLock) {
+                        // Clear a pending BACK longpress if the user releases Back.
+                        if ((code == KeyEvent.KEYCODE_BACK)) {
+                                if (!down){
+                                        backPressed = false;
+                                        mHandler.removeCallbacks(mBackLongPress);
+                                }
+                                else{
+                                        backPressed = true;
+                                }
+                        } else{
+                                backPressed = false;
+                        }
+                }
 
         // If the HOME button is currently being held, then we do special
         // chording with it.
@@ -1241,7 +1267,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
             return true;
         } else if (code == KeyEvent.KEYCODE_BACK) {
             if (down && repeatCount == 0) {
-                mHandler.postDelayed(mBackLongPress, ViewConfiguration.getGlobalActionKeyTimeout());
+                mHandler.postDelayed(mBackLongPress, LONG_PRESS_KEY_BACK_TIMEOUT);
             }
             return false;
         } else if (code == KeyEvent.KEYCODE_MENU) {
@@ -1306,6 +1332,30 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         if ("vision".equals(Build.DEVICE) &&
                 (code == KeyEvent.KEYCODE_USER1 || code == KeyEvent.KEYCODE_USER2 || code == KeyEvent.KEYCODE_USER3)) {
             return handleQuickKeys(win, code, down, keyguardOn);
+        }
+
+        // Handle Browser Key
+        if ("motus".equals(Build.DEVICE) &&
+                (code == KeyEvent.KEYCODE_EXPLORER)) {
+                 String exppackageName = "com.android.browser";
+                 String expclassName = "com.android.browser.BrowserActivity";
+                 Intent explorerIntent = new Intent(Intent.ACTION_VIEW);
+                 explorerIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+                 explorerIntent.setClassName(exppackageName, expclassName);
+                 explorerIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                 mContext.startActivity(explorerIntent);
+            return true;
+        }
+
+        // Handle Envelope Key
+        if ("motus".equals(Build.DEVICE) &&
+                (code == KeyEvent.KEYCODE_ENVELOPE)) {
+                 Intent envelopeIntent = new Intent(Intent.ACTION_MAIN);
+                 envelopeIntent.addCategory(Intent.CATEGORY_DEFAULT);
+                 envelopeIntent.setType("vnd.android-dir/mms-sms");
+                 envelopeIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                 mContext.startActivity(envelopeIntent);
+            return true;
         }
 
         // Shortcuts are invoked through Search+key, so intercept those here
@@ -2303,7 +2353,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
     public void screenTurnedOff(int why) {
         EventLog.writeEvent(70000, 0);
         mKeyguardMediator.onScreenTurnedOff(why);
-        synchronized (mLock) {
+        synchronized (mLock){
             mScreenOn = false;
             updateOrientationListenerLp();
             updateLockScreenTimeout();
